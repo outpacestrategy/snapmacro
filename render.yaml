@@ -1,0 +1,28 @@
+# Render.com blueprint — deploy SnapMacro from GitHub in a few clicks.
+# After pushing to GitHub: render.com -> New -> Blueprint -> pick this repo.
+# Then set the secret env vars (GEMINI_API_KEY, APP_PASSWORD) in the dashboard.
+services:
+  - type: web
+    name: snapmacro
+    runtime: python
+    rootDir: backend
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false          # set this secret in the Render dashboard, never in the repo
+      - key: APP_PASSWORD
+        sync: false          # set a password so the public URL isn't open to abuse
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash-lite
+      - key: USDA_API_KEY
+        value: DEMO_KEY
+      - key: TARGET_CALORIES
+        value: "3200"
+      - key: TARGET_PROTEIN
+        value: "200"
+      - key: TARGET_CARBS
+        value: "400"
+      - key: TARGET_FAT
+        value: "80"

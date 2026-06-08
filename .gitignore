@@ -1,0 +1,15 @@
+node_modules/
+.env
+.env.local
+.DS_Store
+dist/
+build/
+*.log
+ios/Pods/
+*.xcuserstate
+__pycache__/
+*.pyc
+snapmacro.db
+*.db
+*.db-journal
+.venv/
