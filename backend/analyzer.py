@@ -251,7 +251,9 @@ def ground_with_usda(result: dict) -> dict:
                 totals[k] += item_macros[k]
             matched += 1
             breakdown.append({"food": it["food"], "grams": it["grams"], "matched": True,
-                              "usda": ref["desc"], **item_macros})
+                              "usda": ref["desc"],
+                              "per100g": {k: round(per.get(k) or 0, 1) for k in totals},
+                              **item_macros})
 
     coverage = matched / len(named)
     result["ai_estimate"] = ai_estimate

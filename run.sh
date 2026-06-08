@@ -16,7 +16,7 @@ fi
 PY="$VENV/bin/python"
 
 # 3) Install deps into the venv if missing.
-if ! "$PY" -c "import fastapi, pillow_heif" 2>/dev/null; then
+if ! "$PY" -c "import fastapi, pillow_heif, psycopg, psycopg_pool" 2>/dev/null; then
   echo "Installing/updating dependencies into the virtual environment…"
   "$PY" -m pip install --upgrade pip >/dev/null
   "$PY" -m pip install -r requirements.txt

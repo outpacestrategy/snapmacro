@@ -1,8 +1,10 @@
-"""SnapMacro backend — FastAPI app that serves the API and the mobile web UI.
+"""SnapMacro backend — multi-user FastAPI app (Postgres/Supabase).
+
+Auth model: each user gets a private code (no passwords). The code lives in an httponly
+cookie. A personal link (?u=<code>) logs a returning user in. New users sign up with just
+a name. All data is scoped by user_id.
 
 Run:  uvicorn app:app --reload --host 0.0.0.0 --port 8000
-Then open http://localhost:8000 on your computer, or http://<your-ip>:8000 on your phone
-(same Wi-Fi). With no GEMINI_API_KEY set it runs in mock mode.
 """
 import os
 import time
@@ -13,9 +15,8 @@ from datetime import date, datetime
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import db
@@ -25,25 +26,23 @@ import imageutil
 app = FastAPI(title="SnapMacro")
 db.init_db()
 
-# Optional access gate. Set APP_PASSWORD in the host env when deploying publicly so
-# random visitors can't use (and bill) your Gemini key. Unset = open (fine for localhost).
-APP_PASSWORD = os.getenv("APP_PASSWORD", "").strip()
-MAX_UPLOAD_BYTES = 15 * 1024 * 1024  # 15 MB hard cap on photo uploads
+FRONTEND = os.path.join(os.path.dirname(__file__), "..", "frontend")
+MAX_UPLOAD_BYTES = 15 * 1024 * 1024
+COOKIE = "sm_user"
+COOKIE_MAX_AGE = 60 * 60 * 24 * 365  # 1 year
 
-# --- simple in-memory, per-IP rate limiting (no extra deps; single-process uvicorn) ---
+# --- per-IP rate limiting (in-memory) ---
 _hits = defaultdict(lambda: defaultdict(deque))
 _LIMITS = {
-    "default":   (120, 60),   # 120 API calls / 60s per IP (normal use is well under this)
-    "analyze":   (15, 60),    # 15 photo analyses / 60s per IP (this one costs money)
-    "authfail":  (10, 300),   # 10 failed password attempts / 5 min per IP (anti-brute-force)
+    "default": (120, 60),
+    "analyze": (15, 60),
+    "signup":  (8, 3600),   # 8 new accounts / hour / IP
 }
 
 
 def _client_ip(request):
     xff = request.headers.get("x-forwarded-for", "")
-    if xff:
-        return xff.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    return xff.split(",")[0].strip() if xff else (request.client.host if request.client else "?")
 
 
 def _rate_ok(ip, bucket):
@@ -59,7 +58,7 @@ def _rate_ok(ip, bucket):
 
 
 @app.middleware("http")
-async def gate(request, call_next):
+async def rate_limit(request, call_next):
     path = request.url.path
     if path.startswith("/api/"):
         ip = _client_ip(request)
@@ -67,27 +66,30 @@ async def gate(request, call_next):
             return JSONResponse({"error": "rate_limited", "detail": "Slow down a moment."}, status_code=429)
         if path == "/api/analyze" and not _rate_ok(ip, "analyze"):
             return JSONResponse({"error": "rate_limited", "detail": "Too many photos — wait a minute."}, status_code=429)
-        if APP_PASSWORD:
-            token = request.cookies.get("smtoken") or request.headers.get("x-app-token", "")
-            if not secrets.compare_digest(token, APP_PASSWORD):  # constant-time
-                if not _rate_ok(ip, "authfail"):
-                    return JSONResponse({"error": "too_many_attempts"}, status_code=429)
-                return JSONResponse({"error": "unauthorized"}, status_code=401)
     return await call_next(request)
 
-FRONTEND = os.path.join(os.path.dirname(__file__), "..", "frontend")
 
-TARGETS = {
-    "calories": float(os.getenv("TARGET_CALORIES", 2600)),
-    "protein": float(os.getenv("TARGET_PROTEIN", 190)),
-    "carbs": float(os.getenv("TARGET_CARBS", 280)),
-    "fat": float(os.getenv("TARGET_FAT", 80)),
-}
+# --- auth dependency ---
+
+def current_user(request: Request):
+    code = request.cookies.get(COOKIE) or request.headers.get("x-app-token", "")
+    user = db.get_user_by_code(code)
+    if not user:
+        raise HTTPException(401, "Not signed in")
+    return user
 
 
-def _macros(d):
-    return {k: d.get(k, 0) for k in ("calories", "protein", "carbs", "fat")}
+def _targets(user):
+    return {"calories": float(user["target_calories"]), "protein": float(user["target_protein"]),
+            "carbs": float(user["target_carbs"]), "fat": float(user["target_fat"])}
 
+
+def _set_cookie(resp, code, secure):
+    resp.set_cookie(COOKIE, code, max_age=COOKIE_MAX_AGE, httponly=True,
+                    samesite="lax", secure=secure, path="/")
+
+
+# ---------- pages ----------
 
 @app.get("/", response_class=HTMLResponse)
 def home():
@@ -95,23 +97,81 @@ def home():
         return f.read()
 
 
-@app.get("/api/config")
-def config():
-    return {"targets": TARGETS, "mock": not bool(analyzer.GEMINI_API_KEY),
+# ---------- auth / onboarding ----------
+
+class SignupIn(BaseModel):
+    name: str
+
+
+@app.post("/api/signup")
+def signup(body: SignupIn, request: Request):
+    if not _rate_ok(_client_ip(request), "signup"):
+        raise HTTPException(429, "Too many signups from here — try again later.")
+    user = db.create_user(body.name)
+    secure = request.url.scheme == "https"
+    resp = JSONResponse({"id": user["id"], "name": user["name"], "code": user["code"]})
+    _set_cookie(resp, user["code"], secure)
+    return resp
+
+
+class LoginIn(BaseModel):
+    code: str
+
+
+@app.post("/api/login")
+def login(body: LoginIn, request: Request):
+    user = db.get_user_by_code(body.code.strip())
+    if not user:
+        raise HTTPException(404, "Unknown code")
+    secure = request.url.scheme == "https"
+    resp = JSONResponse({"id": user["id"], "name": user["name"]})
+    _set_cookie(resp, user["code"], secure)
+    return resp
+
+
+@app.post("/api/logout")
+def logout():
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(COOKIE, path="/")
+    return resp
+
+
+@app.get("/api/me")
+def me(user=Depends(current_user), request: Request = None):
+    return {"id": user["id"], "name": user["name"], "code": user["code"],
+            "targets": _targets(user), "mock": not bool(analyzer.GEMINI_API_KEY),
             "model": analyzer.GEMINI_MODEL}
 
 
+class SettingsIn(BaseModel):
+    name: str | None = None
+    calories: float | None = None
+    protein: float | None = None
+    carbs: float | None = None
+    fat: float | None = None
+
+
+@app.post("/api/settings")
+def settings(body: SettingsIn, user=Depends(current_user)):
+    if body.name is not None:
+        db.update_name(user["id"], body.name)
+    if None not in (body.calories, body.protein, body.carbs, body.fat):
+        db.update_targets(user["id"], {"calories": body.calories, "protein": body.protein,
+                                       "carbs": body.carbs, "fat": body.fat})
+    return {"ok": True}
+
+
+# ---------- analyze / log ----------
+
 @app.post("/api/analyze")
-async def analyze_photo(image: UploadFile = File(...)):
+async def analyze_photo(image: UploadFile = File(...), user=Depends(current_user)):
     data = await image.read()
     if not data:
         raise HTTPException(400, "Empty image")
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(413, "Image too large (max 15 MB).")
-    # Normalize first: HEIC -> JPEG, auto-rotate, downscale oversized photos.
     norm, mime = imageutil.normalize(data, image.content_type or "image/jpeg")
-    result = analyzer.analyze(norm, mime)
-    return result
+    return analyzer.analyze(norm, mime)
 
 
 class LogIn(BaseModel):
@@ -122,49 +182,27 @@ class LogIn(BaseModel):
     carbs: float
     fat: float
     confidence: str = "medium"
-    source: str = "photo"          # photo | goto | manual
+    source: str = "photo"
     meal_id: int | None = None
     save_to_library: bool = True
 
 
 @app.post("/api/log")
-def log_entry(body: LogIn):
+def log_entry(body: LogIn, user=Depends(current_user)):
+    uid = user["id"]
     macros = {"calories": body.calories, "protein": body.protein,
               "carbs": body.carbs, "fat": body.fat}
     meal_id = body.meal_id
-
-    # Calibration factor corrects a FRESH photo estimate that was matched to a known meal.
-    # Go-to logs already use the meal's stored (already-corrected) macros, so no factor there.
     if meal_id and body.source == "photo":
-        factor = db.get_factor(meal_id)
+        factor = db.get_factor(uid, meal_id)
         if factor != 1.0:
             macros = {k: round(v * factor) for k, v in macros.items()}
-
     if body.save_to_library and body.source != "goto":
-        meal_id = db.upsert_meal(body.name, body.items, macros)
+        meal_id = db.upsert_meal(uid, body.name, body.items, macros)
     elif body.source == "goto" and meal_id:
-        db.upsert_meal(body.name, body.items, macros)  # bumps times_logged
-
-    entry_id = db.add_entry(body.name, body.items, macros, body.confidence,
-                            body.source, meal_id)
+        db.upsert_meal(uid, body.name, body.items, macros)
+    entry_id = db.add_entry(uid, body.name, body.items, macros, body.confidence, body.source, meal_id)
     return {"ok": True, "entry_id": entry_id, "meal_id": meal_id, "macros": macros}
-
-
-class CorrectIn(BaseModel):
-    entry_id: int
-    meal_id: int
-    new_calories: float
-    old_calories: float
-
-
-@app.post("/api/correct")
-def correct(body: CorrectIn):
-    if body.old_calories <= 0:
-        raise HTTPException(400, "old_calories must be > 0")
-    observed = body.new_calories / body.old_calories
-    factor = db.update_factor(body.meal_id, observed)
-    return {"ok": True, "meal_id": body.meal_id, "new_factor": round(factor, 3),
-            "note": "Future logs of this meal auto-adjust by this factor."}
 
 
 class EditIn(BaseModel):
@@ -176,64 +214,59 @@ class EditIn(BaseModel):
 
 
 @app.post("/api/entry/{entry_id}")
-def edit_entry(entry_id: int, body: EditIn):
-    """Correct a logged meal. Updates today's totals AND — if it's a known library meal —
-    teaches a per-meal calibration factor so future logs of it auto-adjust. This is the
-    learning loop."""
-    entry = db.get_entry(entry_id)
+def edit_entry(entry_id: int, body: EditIn, user=Depends(current_user)):
+    uid = user["id"]
+    entry = db.get_entry(uid, entry_id)
     if not entry:
         raise HTTPException(404, "Entry not found")
-    new = {"calories": body.calories, "protein": body.protein,
-           "carbs": body.carbs, "fat": body.fat}
-    db.update_entry(entry_id, body.name, new)
-
+    new = {"calories": body.calories, "protein": body.protein, "carbs": body.carbs, "fat": body.fat}
+    db.update_entry(uid, entry_id, body.name, new)
     learned, factor = False, None
     meal_id = entry.get("meal_id")
-    old_cal = entry.get("calories") or 0
+    old_cal = float(entry.get("calories") or 0)
     if meal_id and old_cal > 0 and abs(body.calories - old_cal) > 1:
-        factor = round(db.update_factor(meal_id, body.calories / old_cal), 3)
-        db.update_meal_macros(meal_id, body.name, new)   # keep go-tos honest
+        factor = round(db.update_factor(uid, meal_id, body.calories / old_cal), 3)
+        db.update_meal_macros(uid, meal_id, body.name, new)
         learned = True
-    return {"ok": True, "learned": learned, "factor": factor,
-            "note": ("Future logs of this meal will auto-adjust." if learned
-                     else "Entry updated.")}
-
-
-@app.get("/api/today")
-def today():
-    entries = db.entries_for_date()
-    totals = {"calories": 0, "protein": 0, "carbs": 0, "fat": 0}
-    for e in entries:
-        for k in totals:
-            totals[k] += e.get(k) or 0
-    remaining = {k: round(TARGETS[k] - totals[k]) for k in totals}
-    return {"date": date.today().isoformat(), "entries": entries,
-            "totals": {k: round(v) for k, v in totals.items()},
-            "remaining": remaining, "targets": TARGETS}
-
-
-@app.get("/api/gotos")
-def gotos():
-    hour = datetime.now().hour
-    return {"hour": hour, "gotos": db.gotos_for_hour(hour)}
-
-
-@app.get("/api/week")
-def week():
-    days = db.entries_last_n_days(7)
-    if not days:
-        return {"days": [], "avg": {"calories": 0, "protein": 0, "carbs": 0, "fat": 0}}
-    n = len(days)
-    avg = {
-        "calories": round(sum(d["c"] or 0 for d in days) / n),
-        "protein": round(sum(d["p"] or 0 for d in days) / n),
-        "carbs": round(sum(d["cb"] or 0 for d in days) / n),
-        "fat": round(sum(d["f"] or 0 for d in days) / n),
-    }
-    return {"days": days, "avg": avg, "note": "Weekly average is the metric that matters."}
+    return {"ok": True, "learned": learned, "factor": factor}
 
 
 @app.delete("/api/entry/{entry_id}")
-def remove_entry(entry_id: int):
-    db.delete_entry(entry_id)
+def remove_entry(entry_id: int, user=Depends(current_user)):
+    db.delete_entry(user["id"], entry_id)
     return {"ok": True}
+
+
+# ---------- views ----------
+
+@app.get("/api/today")
+def today(user=Depends(current_user)):
+    tg = _targets(user)
+    entries = db.entries_for_date(user["id"])
+    totals = {"calories": 0.0, "protein": 0.0, "carbs": 0.0, "fat": 0.0}
+    for e in entries:
+        for k in totals:
+            totals[k] += float(e.get(k) or 0)
+    remaining = {k: round(tg[k] - totals[k]) for k in totals}
+    return {"date": date.today().isoformat(), "entries": entries,
+            "totals": {k: round(v) for k, v in totals.items()},
+            "remaining": remaining, "targets": tg}
+
+
+@app.get("/api/gotos")
+def gotos(user=Depends(current_user)):
+    hour = datetime.now().hour
+    return {"hour": hour, "gotos": db.gotos_for_hour(user["id"], hour)}
+
+
+@app.get("/api/week")
+def week(user=Depends(current_user)):
+    days = db.entries_last_n_days(user["id"], 7)
+    if not days:
+        return {"days": [], "avg": {"calories": 0, "protein": 0, "carbs": 0, "fat": 0}}
+    n = len(days)
+    avg = {"calories": round(sum(float(d["c"] or 0) for d in days) / n),
+           "protein": round(sum(float(d["p"] or 0) for d in days) / n),
+           "carbs": round(sum(float(d["cb"] or 0) for d in days) / n),
+           "fat": round(sum(float(d["f"] or 0) for d in days) / n)}
+    return {"days": days, "avg": avg, "note": "Weekly average is the metric that matters."}

@@ -18,6 +18,15 @@
     padding:0 16px 120px;max-width:520px;margin:0 auto}
   h1{font-size:20px;font-weight:700;letter-spacing:-.3px;margin:18px 2px 2px}
   .sub{color:var(--muted);font-size:12px;margin:0 2px 14px}
+  .topbar{display:flex;align-items:flex-start;justify-content:space-between}
+  .gear{background:var(--card);border:1px solid var(--line);color:var(--txt);font-size:18px;
+    width:40px;height:40px;border-radius:12px;margin-top:18px;cursor:pointer}
+  .linkbox{display:flex;gap:6px;margin:8px 0 4px}
+  .linkbox input{flex:1;background:var(--card2);border:1px solid var(--line);color:var(--muted);
+    border-radius:9px;padding:9px;font-size:12px}
+  .linkbox button{background:var(--accent2);border:none;color:#04222e;font-weight:700;
+    border-radius:9px;padding:0 14px;font-size:13px;cursor:pointer}
+  .ghost{background:none;border:none;color:var(--muted);font-size:13px;cursor:pointer;text-decoration:underline}
   .mockpill{display:inline-block;background:var(--warn);color:#1a1205;font-size:10px;
     font-weight:700;padding:2px 7px;border-radius:20px;vertical-align:middle;margin-left:6px}
   .card{background:var(--card);border:1px solid var(--line);border-radius:18px;
@@ -73,7 +82,20 @@
   .sheet{background:var(--card);width:100%;max-width:520px;border-radius:20px 20px 0 0;
     padding:18px 18px 28px;border-top:1px solid var(--line)}
   .sheet h3{margin:2px 0 2px;font-size:18px}
-  .sheet .note{color:var(--muted);font-size:12px;margin:0 0 14px}
+  .sheet .note{color:var(--muted);font-size:12px;margin:0 0 12px}
+  .itemlist{margin:0 0 14px}
+  .itemlist .ihdr{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
+  .itemrow{display:flex;justify-content:space-between;align-items:center;font-size:13px;
+    padding:7px 10px;background:var(--card2);border:1px solid var(--line);border-radius:9px;margin-bottom:5px}
+  .itemrow .nm{font-weight:600;text-transform:capitalize;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .itemrow .meta{color:var(--muted);font-size:12px}
+  .itemrow.unm .meta{color:var(--warn)}
+  .igrp{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;flex:0 0 auto}
+  .gin{width:54px;background:var(--bg);border:1px solid var(--line);color:var(--txt);
+    border-radius:7px;padding:5px 6px;font-size:13px;text-align:right}
+  .ikcal{min-width:52px;text-align:right;color:var(--muted)}
+  .itemrow.unm .ikcal{color:var(--warn)}
+  .irm{background:none;border:none;color:var(--muted);font-size:14px;cursor:pointer;padding:2px 2px}
   .field{margin-bottom:10px}
   .field label{font-size:11px;color:var(--muted);display:block;margin-bottom:4px}
   .field input{width:100%;background:var(--card2);border:1px solid var(--line);color:var(--txt);
@@ -87,8 +109,13 @@
 </style>
 </head>
 <body>
-  <h1>SnapMacro<span id="mock" class="mockpill" style="display:none">MOCK</span></h1>
-  <p class="sub" id="datesub">Today</p>
+  <div class="topbar">
+    <div>
+      <h1>SnapMacro<span id="mock" class="mockpill" style="display:none">MOCK</span></h1>
+      <p class="sub" id="datesub">Today</p>
+    </div>
+    <button id="gear" class="gear" onclick="openSettings()" style="display:none" title="Settings">⚙</button>
+  </div>
 
   <!-- WIDGET -->
   <div class="card">
@@ -115,7 +142,7 @@
   <!-- CAPTURE -->
   <div class="snap">
     <button class="btn" onclick="document.getElementById('cam').click()">📷 Snap food</button>
-    <button class="btn alt" onclick="document.getElementById('lib').click()">🖼️ Pick</button>
+    <button class="btn alt" onclick="document.getElementById('lib').click()">🖼️ Camera roll</button>
   </div>
   <input id="cam" type="file" accept="image/*" capture="environment" onchange="onPhoto(this)">
   <input id="lib" type="file" accept="image/*" onchange="onPhoto(this)">
@@ -139,6 +166,7 @@
     <div class="sheet">
       <h3 id="sheetName">Meal</h3>
       <p class="note" id="sheetNote"></p>
+      <div class="itemlist" id="itemList"></div>
       <div class="field"><label>Name</label><input id="fName"></div>
       <div class="grid4">
         <div class="field"><label>Cal</label><input id="fCal" type="number" inputmode="numeric"></div>
@@ -153,23 +181,113 @@
     </div>
   </div>
 
+  <!-- ONBOARDING -->
+  <div class="overlay" id="onboard">
+    <div class="sheet">
+      <h3>Welcome to SnapMacro</h3>
+      <p class="note">Snap your food, get calories + macros. No passwords — just a name. You'll get a private link to reopen it anytime.</p>
+      <div id="obStep1">
+        <div class="field"><label>Your name</label><input id="obName" placeholder="Drew" autocomplete="off"></div>
+        <button class="btn" onclick="doSignup()">Start tracking</button>
+      </div>
+      <div id="obStep2" style="display:none">
+        <p class="note">You're in. <b>Bookmark your private link</b> to get back in — it's the only way to reach your data (no password to reset).</p>
+        <div class="linkbox"><input id="obLink" readonly><button onclick="copyLink('obLink')">Copy</button></div>
+        <button class="btn" onclick="finishOnboard()">Continue</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- SETTINGS -->
+  <div class="overlay" id="settings">
+    <div class="sheet">
+      <h3>Settings</h3>
+      <div class="field"><label>Name</label><input id="setName"></div>
+      <p class="note" style="margin:2px 0 6px">Daily targets</p>
+      <div class="grid4">
+        <div class="field"><label>Cal</label><input id="setCal" type="number" inputmode="numeric"></div>
+        <div class="field"><label>P (g)</label><input id="setP" type="number" inputmode="numeric"></div>
+        <div class="field"><label>C (g)</label><input id="setC" type="number" inputmode="numeric"></div>
+        <div class="field"><label>F (g)</label><input id="setF" type="number" inputmode="numeric"></div>
+      </div>
+      <p class="note" style="margin:6px 0 2px">Your private link</p>
+      <div class="linkbox"><input id="setLink" readonly><button onclick="copyLink('setLink')">Copy</button></div>
+      <div class="snap" style="margin-top:8px">
+        <button class="btn" onclick="saveSettings()">Save</button>
+        <button class="btn alt" onclick="$('settings').classList.remove('show')">Close</button>
+      </div>
+      <div style="text-align:center;margin-top:12px"><button class="ghost" onclick="logout()">Log out on this device</button></div>
+    </div>
+  </div>
+
 <script>
-let CFG = {targets:{}}, pending = null;
+let ME = null, pending = null;
 const $ = id => document.getElementById(id);
+const asItems = x => Array.isArray(x) ? x : (()=>{try{return JSON.parse(x||'[]')}catch(_){return[]}})();
 
 async function boot(){
-  let res = await fetch('/api/config');
-  if(res.status === 401){
-    const pw = prompt('Enter access password:') || '';
-    const secure = location.protocol === 'https:' ? '; secure' : '';
-    document.cookie = 'smtoken='+encodeURIComponent(pw)+'; path=/; max-age=2592000; samesite=lax'+secure;
-    res = await fetch('/api/config');
-    if(res.status === 401){ document.body.innerHTML='<p style="color:#f87171;padding:24px">Wrong password. Reload to try again.</p>'; return; }
+  // 1) personal link login: ?u=<code>
+  const params = new URLSearchParams(location.search);
+  const code = params.get('u');
+  if(code){
+    await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({code})}).catch(()=>{});
+    history.replaceState({}, '', location.pathname);   // strip the code from the URL bar
   }
-  CFG = await res.json();
-  if(CFG.mock) $('mock').style.display='inline-block';
+  // 2) who am I?
+  let res = await fetch('/api/me');
+  if(res.status === 401){ $('onboard').classList.add('show'); return; }
+  ME = await res.json();
+  startApp();
+}
+
+function startApp(){
+  if(ME.mock) $('mock').style.display='inline-block';
+  $('gear').style.display='block';
   $('datesub').textContent = new Date().toLocaleDateString(undefined,{weekday:'long',month:'short',day:'numeric'});
-  await refresh();
+  refresh();
+}
+
+// --- onboarding ---
+async function doSignup(){
+  const name = $('obName').value.trim();
+  if(!name){ $('obName').focus(); return; }
+  const r = await fetch('/api/signup',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name})});
+  if(!r.ok){ alert('Signup failed — try again.'); return; }
+  ME = await r.json();
+  $('obLink').value = location.origin + '/?u=' + ME.code;
+  $('obStep1').style.display='none'; $('obStep2').style.display='block';
+}
+async function finishOnboard(){
+  $('onboard').classList.remove('show');
+  const r = await fetch('/api/me'); ME = await r.json();
+  startApp();
+}
+function copyLink(id){
+  const el=$(id); el.select(); el.setSelectionRange(0,9999);
+  navigator.clipboard?.writeText(el.value); toast('Link copied');
+}
+
+// --- settings ---
+function openSettings(){
+  $('setName').value = ME.name||'';
+  $('setCal').value = Math.round(ME.targets.calories); $('setP').value=Math.round(ME.targets.protein);
+  $('setC').value = Math.round(ME.targets.carbs); $('setF').value=Math.round(ME.targets.fat);
+  $('setLink').value = location.origin + '/?u=' + ME.code;
+  $('settings').classList.add('show');
+}
+async function saveSettings(){
+  const body={name:$('setName').value.trim()||'You',
+    calories:+$('setCal').value||0, protein:+$('setP').value||0,
+    carbs:+$('setC').value||0, fat:+$('setF').value||0};
+  await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const r=await fetch('/api/me'); ME=await r.json();
+  $('settings').classList.remove('show'); refresh(); toast('Saved');
+}
+async function logout(){
+  await fetch('/api/logout',{method:'POST'});
+  location.href = location.pathname;
 }
 
 async function refresh(){
@@ -236,6 +354,11 @@ function editEntry(id){
   $('sheetNote').textContent = e.meal_id
     ? 'Fix the numbers — this meal will learn and auto-adjust next time.'
     : 'Fix the numbers for today.';
+  // load saved items into the editable list (recompute works if per100g was stored)
+  sheetItems = asItems(e.items).map(x => (typeof x==='string')
+    ? {food:x, grams:null, matched:null, per100g:null}
+    : {food:x.food||'', grams:x.grams!=null?x.grams:null, matched:x.matched!=null?x.matched:null, per100g:x.per100g||null});
+  renderItems();
   $('logBtn').textContent = 'Save correction'; $('logBtn').disabled = false;
   $('fName').value=e.name; $('fCal').value=Math.round(e.calories);
   $('fP').value=Math.round(e.protein); $('fC').value=Math.round(e.carbs); $('fF').value=Math.round(e.fat);
@@ -264,14 +387,74 @@ async function onPhoto(input){
   $('analyzing').style.display='none';
 }
 
+let sheetItems = [];   // [{food, grams, per100g?, matched}]
+
+function loadItems(d){
+  if(d.grounding && d.grounding.breakdown && d.grounding.breakdown.length){
+    sheetItems = d.grounding.breakdown.map(r=>({
+      food:r.food, grams:r.grams, matched:r.matched, per100g:r.per100g||null}));
+  } else {
+    sheetItems = (d.items_named || []).map(i=>({food:i.food, grams:i.grams, matched:null, per100g:null}));
+  }
+}
+
+function renderItems(){
+  const el = $('itemList');
+  if(!sheetItems.length){ el.innerHTML=''; return; }
+  el.innerHTML = '<div class="ihdr">Ingredients · edit grams to recompute</div>' +
+    sheetItems.map((r,i)=>{
+      const cls = (r.matched===false) ? 'itemrow unm' : 'itemrow';
+      const kcal = r.per100g ? Math.round((r.per100g.calories||0)*(+r.grams||0)/100)+' kcal'
+                             : (r.matched===false ? 'no DB match' : '');
+      return `<div class="${cls}">
+        <span class="nm">${esc(r.food)}</span>
+        <span class="igrp">
+          <input class="gin" type="number" inputmode="numeric" value="${Math.round(r.grams||0)}"
+                 onchange="setGrams(${i}, this.value)"> g
+          <span class="ikcal">${kcal}</span>
+          <button class="irm" onclick="removeItem(${i})" title="remove">✕</button>
+        </span></div>`;
+    }).join('');
+}
+
+function setGrams(i, val){
+  if(sheetItems[i]) sheetItems[i].grams = Math.max(0, +val||0);
+  recompute(); renderItems();
+}
+function removeItem(i){
+  sheetItems.splice(i,1); recompute(); renderItems();
+}
+
+// Recompute meal totals from matched items' per-100g data. Items without DB data
+// can't be auto-summed — we flag that so the user knows to adjust manually.
+function recompute(){
+  if(!sheetItems.some(it=>it.per100g)) return;   // nothing to compute from
+  const t={calories:0,protein:0,carbs:0,fat:0};
+  let unmatched=0;
+  sheetItems.forEach(it=>{
+    if(it.per100g){ const f=(+it.grams||0)/100;
+      t.calories+=(it.per100g.calories||0)*f; t.protein+=(it.per100g.protein||0)*f;
+      t.carbs+=(it.per100g.carbs||0)*f; t.fat+=(it.per100g.fat||0)*f;
+    } else if((+it.grams||0)>0){ unmatched++; }
+  });
+  $('fCal').value=Math.round(t.calories); $('fP').value=Math.round(t.protein);
+  $('fC').value=Math.round(t.carbs); $('fF').value=Math.round(t.fat);
+  if(unmatched){
+    const n=$('sheetNote'); if(!/add .* manually/.test(n.textContent))
+      n.textContent += `  ·  ⚠️ ${unmatched} item(s) not in DB — add their calories manually.`;
+  }
+}
+
 function openSheet(d){
-  pending = {mode:'log', source:'photo', meal_id:null, items:d.items||[], confidence:d.confidence||'medium'};
+  pending = {mode:'log', source:'photo', meal_id:null, confidence:d.confidence||'medium'};
   const logBtn = $('logBtn');
+  sheetItems = [];
 
   // --- honest edge-case states ---
   if(d.error){
     $('sheetName').textContent = '⚠️ Couldn’t analyze';
     $('sheetNote').textContent = d.warning || 'Try retaking the photo.';
+    $('itemList').innerHTML='';
     logBtn.textContent = 'Add manually'; logBtn.disabled = false;
     $('fName').value=''; $('fCal').value=''; $('fP').value=''; $('fC').value=''; $('fF').value='';
     $('overlay').classList.add('show'); return;
@@ -279,11 +462,11 @@ function openSheet(d){
   if(d.is_food === false){
     $('sheetName').textContent = 'Doesn’t look like food';
     $('sheetNote').textContent = d.flag || 'Retake, or add a meal manually below.';
+    $('itemList').innerHTML='';
     logBtn.textContent = 'Add manually'; logBtn.disabled = false;
     $('fName').value = d.name||''; $('fCal').value=''; $('fP').value=''; $('fC').value=''; $('fF').value='';
     $('overlay').classList.add('show'); return;
   }
-
   // --- normal estimate ---
   $('sheetName').textContent = d.mock ? 'Estimate (mock)' : 'Estimate';
   logBtn.textContent = 'Log it'; logBtn.disabled = false;
@@ -302,9 +485,10 @@ function openSheet(d){
   $('fName').value = d.name||'Meal';
   $('fCal').value = d.calories||0; $('fP').value=d.protein||0;
   $('fC').value = d.carbs||0; $('fF').value=d.fat||0;
+  loadItems(d); renderItems();
   $('overlay').classList.add('show');
 }
-function closeSheet(){ $('overlay').classList.remove('show'); pending=null; }
+function closeSheet(){ $('overlay').classList.remove('show'); pending=null; sheetItems=[]; }
 
 async function confirmLog(){
   const cal=+$('fCal').value||0, p=+$('fP').value||0, c=+$('fC').value||0, f=+$('fF').value||0;
@@ -323,7 +507,7 @@ async function confirmLog(){
       return;
     }
     await fetch('/api/log',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({name, items:pending.items, calories:cal, protein:p, carbs:c, fat:f,
+      body:JSON.stringify({name, items:sheetItems, calories:cal, protein:p, carbs:c, fat:f,
         confidence:pending.confidence, source:pending.source, meal_id:pending.meal_id, save_to_library:true})});
     closeSheet(); await refresh();
   }catch(e){ alert('Save failed — is the server running? '+e); }
@@ -341,7 +525,7 @@ async function logGoto(id){
   const g = await (await fetch('/api/gotos')).json();
   const m = g.gotos.find(x=>x.id===id); if(!m) return;
   await fetch('/api/log',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({name:m.name,items:JSON.parse(m.items||'[]'),calories:m.calories,
+    body:JSON.stringify({name:m.name,items:asItems(m.items),calories:m.calories,
       protein:m.protein,carbs:m.carbs,fat:m.fat,confidence:'high',source:'goto',meal_id:m.id,save_to_library:false})});
   await refresh();
 }
