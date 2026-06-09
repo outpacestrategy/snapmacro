@@ -7,9 +7,24 @@ cd "$(dirname "$0")/backend"
 VENV=".venv"
 
 # 1) Create the virtual environment once.
+#    The backend needs Python >= 3.10 (psycopg 3.2 binary wheels have no 3.9 build),
+#    so pick the newest available interpreter rather than a bare `python3` (which on
+#    macOS is often the system 3.9 and will fail dependency install).
 if [ ! -d "$VENV" ]; then
-  echo "Creating virtual environment (first run only)…"
-  python3 -m venv "$VENV"
+  PYBIN=""
+  for cand in python3.13 python3.12 python3.11 python3.10 python3; do
+    if command -v "$cand" >/dev/null 2>&1; then
+      ver=$("$cand" -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null)
+      major=${ver%%.*}; minor=${ver##*.}
+      if [ "$major" = "3" ] && [ "${minor:-0}" -ge 10 ]; then PYBIN="$cand"; break; fi
+    fi
+  done
+  if [ -z "$PYBIN" ]; then
+    echo "ERROR: need Python >= 3.10 but none found. Install one (e.g. 'brew install python@3.12')." >&2
+    exit 1
+  fi
+  echo "Creating virtual environment with $PYBIN ($($PYBIN --version 2>&1))…"
+  "$PYBIN" -m venv "$VENV"
 fi
 
 # 2) Use the venv's python/pip directly (no need to 'activate').
