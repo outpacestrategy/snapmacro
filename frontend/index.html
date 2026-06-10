@@ -266,7 +266,9 @@ async function finishOnboard(){
 }
 function copyLink(id){
   const el=$(id); el.select(); el.setSelectionRange(0,9999);
-  navigator.clipboard?.writeText(el.value); toast('Link copied');
+  if(navigator.clipboard) navigator.clipboard.writeText(el.value);
+  else document.execCommand('copy');   // fallback for non-secure contexts (e.g. phone via LAN IP)
+  toast('Link copied');
 }
 
 // --- settings ---
@@ -321,7 +323,9 @@ function renderWidget(t){
   set('fBar','fTxt',tot.fat,tg.fat);
 }
 
+let LAST_GOTOS = [];
 function renderGotos(g){
+  LAST_GOTOS = g.gotos;
   const el=$('gotos');
   if(!g.gotos.length){ el.innerHTML='<div class="empty card">No go-tos yet — they appear here once you log repeat meals.</div>'; return; }
   el.innerHTML = g.gotos.map(m=>`
@@ -382,7 +386,8 @@ async function onPhoto(input){
   try{
     const res = await fetch('/api/analyze',{method:'POST',body:fd});
     const d = await res.json();
-    openSheet(d);
+    if(!res.ok){ alert(d.detail || 'Analyze failed — try again.'); }
+    else openSheet(d);
   }catch(e){ alert('Analyze failed: '+e); }
   $('analyzing').style.display='none';
 }
@@ -522,8 +527,7 @@ function toast(msg){
 }
 
 async function logGoto(id){
-  const g = await (await fetch('/api/gotos')).json();
-  const m = g.gotos.find(x=>x.id===id); if(!m) return;
+  const m = LAST_GOTOS.find(x=>x.id===id); if(!m) return;
   await fetch('/api/log',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({name:m.name,items:asItems(m.items),calories:m.calories,
       protein:m.protein,carbs:m.carbs,fat:m.fat,confidence:'high',source:'goto',meal_id:m.id,save_to_library:false})});

@@ -36,9 +36,7 @@ def normalize(data: bytes, mime: str = "image/jpeg"):
     try:
         im = Image.open(io.BytesIO(data))
         im = ImageOps.exif_transpose(im)          # honor EXIF orientation
-        if im.mode not in ("RGB", "L"):
-            im = im.convert("RGB")
-        elif im.mode == "L":
+        if im.mode != "RGB":
             im = im.convert("RGB")
         w, h = im.size
         scale = min(1.0, MAX_EDGE / float(max(w, h)))

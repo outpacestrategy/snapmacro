@@ -18,6 +18,7 @@ load_dotenv()
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 import db
 import analyzer
@@ -48,6 +49,7 @@ def _client_ip(request):
 def _rate_ok(ip, bucket):
     limit, window = _LIMITS[bucket]
     now = time.time()
+    _sweep(now)
     dq = _hits[ip][bucket]
     while dq and dq[0] <= now - window:
         dq.popleft()
@@ -55,6 +57,28 @@ def _rate_ok(ip, bucket):
         return False
     dq.append(now)
     return True
+
+
+_last_sweep = 0.0
+
+
+def _sweep(now):
+    """Drop IPs whose windows have fully expired so _hits can't grow without bound
+    (a public URL gets scanned; each scanner IP would otherwise live forever)."""
+    global _last_sweep
+    if now - _last_sweep < 600:
+        return
+    _last_sweep = now
+    for ip in list(_hits):
+        for bucket in list(_hits[ip]):
+            _, window = _LIMITS[bucket]
+            dq = _hits[ip][bucket]
+            while dq and dq[0] <= now - window:
+                dq.popleft()
+            if not dq:
+                del _hits[ip][bucket]
+        if not _hits[ip]:
+            del _hits[ip]
 
 
 @app.middleware("http")
@@ -84,6 +108,13 @@ def _targets(user):
             "carbs": float(user["target_carbs"]), "fat": float(user["target_fat"])}
 
 
+def _is_https(request):
+    # Behind a TLS-terminating proxy (Render, Railway) the app sees plain http;
+    # trust x-forwarded-proto so the session cookie still gets the Secure flag.
+    fwd = request.headers.get("x-forwarded-proto", "").split(",")[0].strip()
+    return request.url.scheme == "https" or fwd == "https"
+
+
 def _set_cookie(resp, code, secure):
     resp.set_cookie(COOKIE, code, max_age=COOKIE_MAX_AGE, httponly=True,
                     samesite="lax", secure=secure, path="/")
@@ -108,7 +139,7 @@ def signup(body: SignupIn, request: Request):
     if not _rate_ok(_client_ip(request), "signup"):
         raise HTTPException(429, "Too many signups from here — try again later.")
     user = db.create_user(body.name)
-    secure = request.url.scheme == "https"
+    secure = _is_https(request)
     resp = JSONResponse({"id": user["id"], "name": user["name"], "code": user["code"]})
     _set_cookie(resp, user["code"], secure)
     return resp
@@ -123,7 +154,7 @@ def login(body: LoginIn, request: Request):
     user = db.get_user_by_code(body.code.strip())
     if not user:
         raise HTTPException(404, "Unknown code")
-    secure = request.url.scheme == "https"
+    secure = _is_https(request)
     resp = JSONResponse({"id": user["id"], "name": user["name"]})
     _set_cookie(resp, user["code"], secure)
     return resp
@@ -137,7 +168,7 @@ def logout():
 
 
 @app.get("/api/me")
-def me(user=Depends(current_user), request: Request = None):
+def me(user=Depends(current_user)):
     return {"id": user["id"], "name": user["name"], "code": user["code"],
             "targets": _targets(user), "mock": not bool(analyzer.GEMINI_API_KEY),
             "model": analyzer.GEMINI_MODEL}
@@ -170,8 +201,13 @@ async def analyze_photo(image: UploadFile = File(...), user=Depends(current_user
         raise HTTPException(400, "Empty image")
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(413, "Image too large (max 15 MB).")
-    norm, mime = imageutil.normalize(data, image.content_type or "image/jpeg")
-    return analyzer.analyze(norm, mime)
+
+    # PIL decode + Gemini (30s timeout) + USDA lookups are all blocking; run off the
+    # event loop so one slow photo can't stall every other user's request.
+    def _work():
+        norm, mime = imageutil.normalize(data, image.content_type or "image/jpeg")
+        return analyzer.analyze(norm, mime)
+    return await run_in_threadpool(_work)
 
 
 class LogIn(BaseModel):
@@ -233,7 +269,8 @@ def edit_entry(entry_id: int, body: EditIn, user=Depends(current_user)):
 
 @app.delete("/api/entry/{entry_id}")
 def remove_entry(entry_id: int, user=Depends(current_user)):
-    db.delete_entry(user["id"], entry_id)
+    if not db.delete_entry(user["id"], entry_id):
+        raise HTTPException(404, "Entry not found")
     return {"ok": True}
 
 

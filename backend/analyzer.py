@@ -14,6 +14,8 @@ import os
 import json
 import base64
 import random
+from concurrent.futures import ThreadPoolExecutor
+
 import httpx
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
@@ -238,22 +240,26 @@ def ground_with_usda(result: dict) -> dict:
     totals = {"calories": 0.0, "protein": 0.0, "carbs": 0.0, "fat": 0.0}
     breakdown, matched = [], 0
 
+    # Look items up concurrently — sequentially this is the slowest part of the photo
+    # flow (up to 12 round-trips). httpx.Client is thread-safe; ex.map keeps order.
     with httpx.Client(timeout=15) as client:
-        for it in named:
-            ref = _usda_per100g(it["food"], client)
-            if not ref:
-                breakdown.append({"food": it["food"], "grams": it["grams"], "matched": False})
-                continue
-            f = it["grams"] / 100.0
-            per = ref["per100g"]
-            item_macros = {k: round((per.get(k) or 0) * f) for k in totals}
-            for k in totals:
-                totals[k] += item_macros[k]
-            matched += 1
-            breakdown.append({"food": it["food"], "grams": it["grams"], "matched": True,
-                              "usda": ref["desc"],
-                              "per100g": {k: round(per.get(k) or 0, 1) for k in totals},
-                              **item_macros})
+        with ThreadPoolExecutor(max_workers=min(6, len(named))) as ex:
+            refs = list(ex.map(lambda it: _usda_per100g(it["food"], client), named))
+
+    for it, ref in zip(named, refs):
+        if not ref:
+            breakdown.append({"food": it["food"], "grams": it["grams"], "matched": False})
+            continue
+        f = it["grams"] / 100.0
+        per = ref["per100g"]
+        item_macros = {k: round((per.get(k) or 0) * f) for k in totals}
+        for k in totals:
+            totals[k] += item_macros[k]
+        matched += 1
+        breakdown.append({"food": it["food"], "grams": it["grams"], "matched": True,
+                          "usda": ref["desc"],
+                          "per100g": {k: round(per.get(k) or 0, 1) for k in totals},
+                          **item_macros})
 
     coverage = matched / len(named)
     result["ai_estimate"] = ai_estimate

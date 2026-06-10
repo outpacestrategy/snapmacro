@@ -173,7 +173,10 @@ def update_entry(user_id, entry_id, name, macros):
 
 def delete_entry(user_id, entry_id):
     with pool().connection() as conn:
-        conn.execute("delete from entries where id=%s and user_id=%s", (entry_id, user_id))
+        row = conn.execute(
+            "delete from entries where id=%s and user_id=%s returning id",
+            (entry_id, user_id)).fetchone()
+        return row is not None
 
 
 # ---------- go-tos ----------
@@ -214,8 +217,9 @@ def update_factor(user_id, meal_id, observed_factor):
             n = r["samples"] + 1
             new = (float(r["factor"]) * r["samples"] + observed_factor) / n
             conn.execute(
-                "update corrections set factor=%s, samples=%s, updated_at=now() where meal_id=%s",
-                (new, n, meal_id))
+                """update corrections set factor=%s, samples=%s, updated_at=now()
+                   where user_id=%s and meal_id=%s""",
+                (new, n, user_id, meal_id))
             return new
         conn.execute(
             "insert into corrections (user_id, meal_id, factor, samples) values (%s,%s,%s,1)",
