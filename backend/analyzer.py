@@ -56,7 +56,8 @@ tortillas, butter vs dry-cooked, sugared vs diet when the label is unreadable). 
 ONE question per response — the single most impactful unresolved ambiguity. The user's
 note may contain earlier Q/A pairs: NEVER re-ask anything it answers; ask about a
 remaining DIFFERENT ambiguity or omit the field if nothing material is left. Never ask
-about portion size (the user can edit grams).
+about portion size (the user can edit grams). Only ask when your confidence is medium or
+low — a high-confidence estimate never asks.
 Keep totals realistic for one human meal (calories roughly 0-3000). Be terse."""
 
 # Sanity bounds for a single human meal. Outside these = flag for review, never silent.
@@ -171,6 +172,11 @@ def validate(out: dict) -> dict:
     """Guardrails: catch non-food, absurd magnitudes, and empty results. Never silent —
     flags get surfaced to the user. Returns the (possibly annotated) dict."""
     flags = []
+
+    # Effort gate: clarifying questions are for uncertainty only. A high-confidence
+    # estimate never asks — enforced here so it can't depend on prompt compliance.
+    if out.get("confidence") == "high":
+        out.pop("question", None)
 
     # 1) Non-food: zero it out so nothing garbage can be logged by accident.
     if not out.get("is_food", True):
