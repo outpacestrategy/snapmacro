@@ -578,7 +578,7 @@ function openSheet(d){
   } else if(d.grounding){
     note += `  ·  AI-only (USDA matched ${d.grounding.matched}/${d.grounding.total_items}).`;
   }
-  $('sheetNote').textContent = note;
+  $('sheetNote').textContent = note.replace(/^\s*·\s*/, '');
   $('fName').value = d.name||'Meal';
   $('fCal').value = d.calories||0; $('fP').value=d.protein||0;
   $('fC').value = d.carbs||0; $('fF').value=d.fat||0;

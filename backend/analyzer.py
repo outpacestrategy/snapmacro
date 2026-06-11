@@ -41,10 +41,21 @@ brands: Alani Nu, Celsius, C4, Ghost, Reign, Bang, and Monster Ultra energy drin
 zero/low-sugar (~5-15 kcal per can) even when the can doesn't say so — name them
 "<brand> sugar-free energy drink" unless it is clearly a sugared variety.
 
+Look-alike traps — these CANNOT be told apart by sight, so when one appears and neither a
+label nor the user's note settles it, your confidence MUST NOT be "high" and you SHOULD use
+the question field to ask:
+- scrambled eggs vs egg salad (mayo / greek yogurt / cottage cheese based) — wildly
+  different macros, visually identical
+- flour vs corn tortillas
+- cooked in butter/oil vs dry-cooked
+- regular vs diet drink when the label is unreadable
+- full-fat vs low-fat dairy (yogurt, cottage cheese, milk)
+Never silently assume either option.
+
 Return ONLY valid minified JSON, no markdown, exactly:
 {"is_food":true|false,
 "name":"<short meal name, or what the photo shows if not food>",
-"items":[{"food":"<plain USDA-style food name>","grams":<int TOTAL grams>,"count":<int, ONLY for discrete countable pieces (tortillas, eggs, slices, cans) — omit otherwise>}],
+"items":[{"food":"<plain USDA-style food name>","grams":<int TOTAL grams>,"count":<int — REQUIRED whenever the item is discrete countable pieces (tortillas, eggs, slices, cans); omit for amorphous foods>}],
 "portion_note":"<brief portion reasoning, or why it's not food>",
 "calories":<int>,"protein_g":<int>,"carbs_g":<int>,"fat_g":<int>,
 "confidence":"high|medium|low",
@@ -62,6 +73,33 @@ Keep totals realistic for one human meal (calories roughly 0-3000). Be terse."""
 
 # Sanity bounds for a single human meal. Outside these = flag for review, never silent.
 MAX_BOUNDS = {"calories": 4000, "protein": 400, "carbs": 600, "fat": 300}
+
+# Look-alike traps the vision model gets confidently wrong (it can't see what it can't
+# see). When one appears in a result and no user note settles it, we inject the question
+# ourselves — prompt instructions alone proved unreliable here. (trigger, exclude, question)
+LOOKALIKE_QUESTIONS = [
+    (("scrambled egg",), ("salad",),
+     {"text": "Plain scrambled eggs, or egg salad?",
+      "options": ["Plain scrambled eggs", "Egg salad w/ mayo",
+                  "Egg salad w/ greek yogurt or cottage cheese"]}),
+    (("tortilla",), (),
+     {"text": "Flour or corn tortillas?", "options": ["Flour", "Corn"]}),
+]
+
+
+def _inject_lookalike_question(result, note=""):
+    """Deterministic backstop for the prompt's look-alike rules. Only fires on a fresh,
+    note-less analysis that didn't already ask something."""
+    if note or result.get("question") or not result.get("is_food", True):
+        return result
+    hay = " ".join([result.get("name", "")] + [str(i) for i in result.get("items", [])]).lower()
+    for triggers, excludes, q in LOOKALIKE_QUESTIONS:
+        if any(t in hay for t in triggers) and not any(x in hay for x in excludes):
+            result["question"] = {"text": q["text"], "options": list(q["options"])}
+            if result.get("confidence") == "high":
+                result["confidence"] = "medium"   # a look-alike means it isn't actually certain
+            break
+    return result
 
 # Mock meals now carry per-item grams so grounding can run end-to-end offline-of-Gemini.
 MOCK_MEALS = [
@@ -222,8 +260,10 @@ def _gemini(image_bytes: bytes, mime: str = "image/jpeg", note: str = "") -> dic
     headers = {"x-goog-api-key": GEMINI_API_KEY}
     prompt = PROMPT
     if note:
-        prompt += ("\n\nThe user added this note about the meal — TRUST IT over visual "
-                   f"guesses for contents, preparation, and hidden ingredients: {note}")
+        prompt += ("\n\nThe user added this note about the meal — it is GROUND TRUTH and "
+                   "overrides anything the photo suggests. If it names the dish or its "
+                   "ingredients, use those exact foods in your items (they were ambiguous "
+                   f"or invisible in the photo): {note}")
     payload = {
         "contents": [{
             "parts": [
@@ -361,7 +401,7 @@ def analyze(image_bytes: bytes, mime: str = "image/jpeg", note: str = "") -> dic
     `note` is the user's optional description — it sharpens the estimate but is never required.
     """
     if not GEMINI_API_KEY:
-        return validate(ground_with_usda(_mock(image_bytes)))
+        return validate(_inject_lookalike_question(ground_with_usda(_mock(image_bytes)), note))
     try:
         result = _gemini(image_bytes, mime, note)
     except json.JSONDecodeError:
@@ -375,4 +415,4 @@ def analyze(image_bytes: bytes, mime: str = "image/jpeg", note: str = "") -> dic
         return _error_result(f"Image couldn't be analyzed (HTTP {code}). Try a different photo.")
     except Exception as e:  # noqa: BLE001
         return _error_result(f"Analysis failed ({type(e).__name__}). Try again.")
-    return validate(ground_with_usda(result))
+    return validate(_inject_lookalike_question(ground_with_usda(result), note))
