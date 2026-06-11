@@ -32,6 +32,12 @@ If it IS food: identify each distinct item and estimate its EDIBLE WEIGHT in gra
 strongest job is portion size; macros are looked up separately). Hidden oils/butter/sugar
 are invisible, so include a realistic cooking-fat item if the dish was likely cooked in fat.
 
+Packaged/branded products: READ any visible can/label text. If a drink or packaged item is
+sugar-free, zero-sugar, or diet, you MUST say so in its food name using the words
+"sugar-free" or "zero sugar" (e.g. "sugar-free energy drink", never just "energy drink") —
+the macro database matches on your food name and would otherwise assume full sugar. If you
+recognize the exact product, use its real label nutrition for your macro totals.
+
 Return ONLY valid minified JSON, no markdown, exactly:
 {"is_food":true|false,
 "name":"<short meal name, or what the photo shows if not food>",
@@ -267,8 +273,22 @@ def ground_with_usda(result: dict) -> dict:
                            "total_items": len(named), "breakdown": breakdown,
                            "grounded_totals": {k: round(v) for k, v in totals.items()}}
 
-    # Use grounded numbers as the primary estimate when most of the plate matched.
-    if coverage >= 0.6:
+    # Use grounded numbers as the primary estimate when most of the plate matched —
+    # unless they wildly contradict the AI's own estimate. A huge gap usually means a
+    # bad generic DB match (e.g. a sugar-free energy drink matched to the sugared
+    # generic, or "diet coke" matched to "Roll, diet"); the label-aware AI estimate is
+    # more trustworthy there, and we surface the conflict instead of silently picking.
+    ai_cal, gr_cal = float(ai_estimate.get("calories") or 0), totals["calories"]
+    conflict = (ai_cal > 0 and gr_cal > 0 and abs(ai_cal - gr_cal) > 100
+                and max(ai_cal, gr_cal) / min(ai_cal, gr_cal) > 2.5)
+    if coverage >= 0.6 and conflict:
+        result["source_of_numbers"] = "ai_estimate_db_conflict"
+        result["needs_attention"] = True
+        result["confidence"] = "low"
+        result["flag"] = (f"AI read this as ~{round(ai_cal)} kcal but the nutrition DB "
+                          f"match says ~{round(gr_cal)} — likely a diet/branded product "
+                          f"the DB matched wrong. Check before logging.")
+    elif coverage >= 0.6:
         for k in totals:
             result[k] = round(totals[k])
         result["source_of_numbers"] = "usda_grounded"
