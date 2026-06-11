@@ -47,7 +47,14 @@ Return ONLY valid minified JSON, no markdown, exactly:
 "items":[{"food":"<plain USDA-style food name>","grams":<int TOTAL grams>,"count":<int, ONLY for discrete countable pieces (tortillas, eggs, slices, cans) — omit otherwise>}],
 "portion_note":"<brief portion reasoning, or why it's not food>",
 "calories":<int>,"protein_g":<int>,"carbs_g":<int>,"fat_g":<int>,
-"confidence":"high|medium|low"}
+"confidence":"high|medium|low",
+"question":{"text":"<one short question>","options":["<2-4 short answers>"]}}
+
+The "question" field is OPTIONAL and usually OMITTED. Include it only when ONE visual
+ambiguity would materially change the macros (e.g. grilled vs fried, flour vs corn
+tortillas, butter vs dry-cooked, sugared vs diet when the label is unreadable). At most
+ONE question. Never ask about portion size (the user can edit grams), and never ask
+anything the user's note already answers.
 Keep totals realistic for one human meal (calories roughly 0-3000). Be terse."""
 
 # Sanity bounds for a single human meal. Outside these = flag for review, never silent.
@@ -79,7 +86,9 @@ MOCK_MEALS = [
                {"food": "asparagus", "grams": 85},
                {"food": "olive oil", "grams": 7}],
      "portion_note": "~8oz steak, 1 medium sweet potato", "calories": 680, "protein_g": 52,
-     "carbs_g": 40, "fat_g": 32, "confidence": "low"},
+     "carbs_g": 40, "fat_g": 32, "confidence": "low",
+     "question": {"text": "Was the steak cooked in butter/oil or dry-grilled?",
+                  "options": ["Butter/oil", "Dry-grilled"]}},
 ]
 
 # USDA nutrient name -> our macro key. Energy handled separately (needs KCAL unit).
@@ -130,7 +139,19 @@ def _normalize(raw: dict) -> dict:
     if isinstance(is_food, str):
         is_food = is_food.strip().lower() not in ("false", "no", "0")
 
+    # Optional single clarifying question (agent design rule: at most one, only when
+    # it materially changes the numbers). Validate shape strictly; drop anything off.
+    question = None
+    q = raw.get("question")
+    if isinstance(q, dict):
+        text = str(q.get("text", "")).strip()[:120]
+        opts = [str(o).strip()[:40] for o in (q.get("options") or [])
+                if isinstance(o, (str, int, float)) and str(o).strip()][:4]
+        if text and len(opts) >= 2:
+            question = {"text": text, "options": opts}
+
     return {
+        **({"question": question} if question else {}),
         "is_food": bool(is_food),
         "name": str(raw.get("name", "Meal")).strip()[:60] or "Meal",
         "items": items,                       # flat list for display/storage (back-compat)
@@ -151,6 +172,7 @@ def validate(out: dict) -> dict:
 
     # 1) Non-food: zero it out so nothing garbage can be logged by accident.
     if not out.get("is_food", True):
+        out.pop("question", None)
         out.update({"calories": 0, "protein": 0, "carbs": 0, "fat": 0,
                     "items": [], "items_named": [], "confidence": "low"})
         out["needs_attention"] = True

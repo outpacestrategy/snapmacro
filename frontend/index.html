@@ -101,6 +101,11 @@
   .ikcal{min-width:52px;text-align:right;color:var(--muted)}
   .itemrow.unm .ikcal{color:var(--warn)}
   .irm{background:none;border:none;color:var(--muted);font-size:14px;cursor:pointer;padding:2px 2px}
+  .qtxt{font-size:13px;font-weight:700;margin:2px 0 8px}
+  .qopts{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:14px}
+  .qopt{background:var(--card2);border:1px solid var(--accent2);color:var(--accent2);
+    border-radius:20px;padding:8px 14px;font-size:13px;font-weight:700;cursor:pointer}
+  .qopt:active{transform:scale(.97)}
   .field{margin-bottom:10px}
   .field label{font-size:11px;color:var(--muted);display:block;margin-bottom:4px}
   .field input{width:100%;background:var(--card2);border:1px solid var(--line);color:var(--txt);
@@ -173,6 +178,7 @@
     <div class="sheet">
       <h3 id="sheetName">Meal</h3>
       <p class="note" id="sheetNote"></p>
+      <div id="qBox"></div>
       <div class="itemlist" id="itemList"></div>
       <div class="field"><label>Name</label><input id="fName"></div>
       <div class="grid4">
@@ -370,7 +376,7 @@ function editEntry(id){
     ? {food:x, grams:null, count:null, matched:null, per100g:null}
     : {food:x.food||'', grams:x.grams!=null?x.grams:null, count:x.count||null,
        matched:x.matched!=null?x.matched:null, per100g:x.per100g||null});
-  renderItems();
+  renderItems(); $('qBox').innerHTML='';
   $('logBtn').textContent = 'Save correction'; $('logBtn').disabled = false;
   $('fName').value=e.name; $('fCal').value=Math.round(e.calories);
   $('fP').value=Math.round(e.protein); $('fC').value=Math.round(e.carbs); $('fF').value=Math.round(e.fat);
@@ -386,12 +392,15 @@ function renderWeek(w){
     <p class="honest" style="margin-top:8px">${w.days.length} day(s) logged. ${esc(w.note||'')}</p>`;
 }
 
+let LAST_FILE = null, PENDING_NOTE = '', QA = false;
+
 async function onPhoto(input){
   const file = input.files[0]; input.value='';
   if(!file) return;
   $('analyzing').style.display='block';
   const fd = new FormData(); fd.append('image', file);
   const note = $('noteIn').value.trim();
+  LAST_FILE = file; PENDING_NOTE = note; QA = false;
   if(note) fd.append('note', note);
   try{
     const res = await fetch('/api/analyze',{method:'POST',body:fd});
@@ -481,7 +490,7 @@ function openSheet(d){
   if(d.error){
     $('sheetName').textContent = '⚠️ Couldn’t analyze';
     $('sheetNote').textContent = d.warning || 'Try retaking the photo.';
-    $('itemList').innerHTML='';
+    $('itemList').innerHTML=''; $('qBox').innerHTML='';
     logBtn.textContent = 'Add manually'; logBtn.disabled = false;
     $('fName').value=''; $('fCal').value=''; $('fP').value=''; $('fC').value=''; $('fF').value='';
     $('overlay').classList.add('show'); return;
@@ -489,7 +498,7 @@ function openSheet(d){
   if(d.is_food === false){
     $('sheetName').textContent = 'Doesn’t look like food';
     $('sheetNote').textContent = d.flag || 'Retake, or add a meal manually below.';
-    $('itemList').innerHTML='';
+    $('itemList').innerHTML=''; $('qBox').innerHTML='';
     logBtn.textContent = 'Add manually'; logBtn.disabled = false;
     $('fName').value = d.name||''; $('fCal').value=''; $('fP').value=''; $('fC').value=''; $('fF').value='';
     $('overlay').classList.add('show'); return;
@@ -512,8 +521,36 @@ function openSheet(d){
   $('fName').value = d.name||'Meal';
   $('fCal').value = d.calories||0; $('fP').value=d.protein||0;
   $('fC').value = d.carbs||0; $('fF').value=d.fat||0;
+  pending.question = d.question || null;
+  renderQuestion(d);
   loadItems(d); renderItems();
   $('overlay').classList.add('show');
+}
+
+// One tappable clarifying question, only when the model says the ambiguity matters
+// (same design rule as the future chat agent). Answering re-analyzes the same photo
+// with the answer as ground truth; ignoring it and logging straight away is always fine.
+function renderQuestion(d){
+  const el = $('qBox');
+  if(!d.question || QA){ el.innerHTML=''; return; }
+  el.innerHTML = `<div class="qtxt">${esc(d.question.text)}</div>
+    <div class="qopts">${d.question.options.map((o,i)=>
+      `<button class="qopt" onclick="answerQ(${i})">${esc(o)}</button>`).join('')}</div>`;
+}
+
+async function answerQ(i){
+  const opt = pending && pending.question && pending.question.options[i];
+  if(!opt || !LAST_FILE) return;
+  QA = true;
+  $('qBox').innerHTML = '<div class="loading"><span class="spin"></span>Updating estimate…</div>';
+  const fd = new FormData(); fd.append('image', LAST_FILE);
+  fd.append('note', (PENDING_NOTE ? PENDING_NOTE + '; ' : '') + opt);
+  try{
+    const r = await fetch('/api/analyze',{method:'POST',body:fd});
+    const d = await r.json();
+    if(r.ok) openSheet(d);
+    else $('qBox').innerHTML='';
+  }catch(e){ $('qBox').innerHTML=''; }
 }
 function closeSheet(){ $('overlay').classList.remove('show'); pending=null; sheetItems=[]; }
 
