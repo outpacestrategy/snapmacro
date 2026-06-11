@@ -15,7 +15,7 @@ from datetime import date, datetime
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Request
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
@@ -195,18 +195,20 @@ def settings(body: SettingsIn, user=Depends(current_user)):
 # ---------- analyze / log ----------
 
 @app.post("/api/analyze")
-async def analyze_photo(image: UploadFile = File(...), user=Depends(current_user)):
+async def analyze_photo(image: UploadFile = File(...), note: str = Form(""),
+                        user=Depends(current_user)):
     data = await image.read()
     if not data:
         raise HTTPException(400, "Empty image")
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(413, "Image too large (max 15 MB).")
+    note = note.strip()[:200]
 
     # PIL decode + Gemini (30s timeout) + USDA lookups are all blocking; run off the
     # event loop so one slow photo can't stall every other user's request.
     def _work():
         norm, mime = imageutil.normalize(data, image.content_type or "image/jpeg")
-        return analyzer.analyze(norm, mime)
+        return analyzer.analyze(norm, mime, note)
     return await run_in_threadpool(_work)
 
 

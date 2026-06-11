@@ -52,6 +52,11 @@
   .btn.alt{background:var(--card2);color:var(--txt);border:1px solid var(--line)}
   .btn:active{transform:scale(.98)}
   input[type=file]{display:none}
+  .notein{width:100%;margin-top:10px;background:var(--card);border:1px solid var(--line);
+    color:var(--txt);border-radius:12px;padding:11px 12px;font-size:13px}
+  .notein::placeholder{color:var(--muted)}
+  .cnt{width:36px;background:var(--bg);border:1px solid var(--line);color:var(--txt);
+    border-radius:7px;padding:5px 4px;font-size:13px;text-align:center}
   .section-title{font-size:12px;color:var(--muted);text-transform:uppercase;
     letter-spacing:.6px;margin:18px 4px 8px;font-weight:700}
   /* go-tos */
@@ -146,6 +151,8 @@
   </div>
   <input id="cam" type="file" accept="image/*" capture="environment" onchange="onPhoto(this)">
   <input id="lib" type="file" accept="image/*" onchange="onPhoto(this)">
+  <input id="noteIn" class="notein" autocomplete="off"
+         placeholder="Optional note — e.g. “egg salad w/ greek yogurt, flour tortillas”">
   <p class="honest">Educated guess, not a food scale. Track the <b>weekly average</b> vs. your training — daily numbers are noisy.</p>
   <div id="analyzing" class="loading" style="display:none"><span class="spin"></span>Analyzing photo…</div>
 
@@ -360,8 +367,9 @@ function editEntry(id){
     : 'Fix the numbers for today.';
   // load saved items into the editable list (recompute works if per100g was stored)
   sheetItems = asItems(e.items).map(x => (typeof x==='string')
-    ? {food:x, grams:null, matched:null, per100g:null}
-    : {food:x.food||'', grams:x.grams!=null?x.grams:null, matched:x.matched!=null?x.matched:null, per100g:x.per100g||null});
+    ? {food:x, grams:null, count:null, matched:null, per100g:null}
+    : {food:x.food||'', grams:x.grams!=null?x.grams:null, count:x.count||null,
+       matched:x.matched!=null?x.matched:null, per100g:x.per100g||null});
   renderItems();
   $('logBtn').textContent = 'Save correction'; $('logBtn').disabled = false;
   $('fName').value=e.name; $('fCal').value=Math.round(e.calories);
@@ -383,11 +391,13 @@ async function onPhoto(input){
   if(!file) return;
   $('analyzing').style.display='block';
   const fd = new FormData(); fd.append('image', file);
+  const note = $('noteIn').value.trim();
+  if(note) fd.append('note', note);
   try{
     const res = await fetch('/api/analyze',{method:'POST',body:fd});
     const d = await res.json();
     if(!res.ok){ alert(d.detail || 'Analyze failed — try again.'); }
-    else openSheet(d);
+    else { $('noteIn').value=''; openSheet(d); }
   }catch(e){ alert('Analyze failed: '+e); }
   $('analyzing').style.display='none';
 }
@@ -397,9 +407,9 @@ let sheetItems = [];   // [{food, grams, per100g?, matched}]
 function loadItems(d){
   if(d.grounding && d.grounding.breakdown && d.grounding.breakdown.length){
     sheetItems = d.grounding.breakdown.map(r=>({
-      food:r.food, grams:r.grams, matched:r.matched, per100g:r.per100g||null}));
+      food:r.food, grams:r.grams, count:r.count||null, matched:r.matched, per100g:r.per100g||null}));
   } else {
-    sheetItems = (d.items_named || []).map(i=>({food:i.food, grams:i.grams, matched:null, per100g:null}));
+    sheetItems = (d.items_named || []).map(i=>({food:i.food, grams:i.grams, count:i.count||null, matched:null, per100g:null}));
   }
 }
 
@@ -411,8 +421,10 @@ function renderItems(){
       const cls = (r.matched===false) ? 'itemrow unm' : 'itemrow';
       const kcal = r.per100g ? Math.round((r.per100g.calories||0)*(+r.grams||0)/100)+' kcal'
                              : (r.matched===false ? 'no DB match' : '');
+      const cnt = (r.count>=2) ? `<input class="cnt" type="number" inputmode="numeric"
+                 value="${r.count}" onchange="setCount(${i}, this.value)"> ×` : '';
       return `<div class="${cls}">
-        <span class="nm">${esc(r.food)}</span>
+        ${cnt}<span class="nm">${esc(r.food)}</span>
         <span class="igrp">
           <input class="gin" type="number" inputmode="numeric" value="${Math.round(r.grams||0)}"
                  onchange="setGrams(${i}, this.value)"> g
@@ -424,6 +436,16 @@ function renderItems(){
 
 function setGrams(i, val){
   if(sheetItems[i]) sheetItems[i].grams = Math.max(0, +val||0);
+  recompute(); renderItems();
+}
+// Changing the piece count scales total grams by the per-piece weight (e.g. 3 tortillas
+// at 150g total -> 50g each -> "2" makes it 100g) — easier than gram math for humans.
+function setCount(i, val){
+  const it = sheetItems[i]; if(!it) return;
+  const n = Math.max(1, Math.round(+val||1));
+  const unit = (it.count>=1 && it.grams) ? it.grams/it.count : null;
+  if(unit) it.grams = Math.round(unit*n);
+  it.count = n;
   recompute(); renderItems();
 }
 function removeItem(i){

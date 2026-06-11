@@ -36,12 +36,15 @@ Packaged/branded products: READ any visible can/label text. If a drink or packag
 sugar-free, zero-sugar, or diet, you MUST say so in its food name using the words
 "sugar-free" or "zero sugar" (e.g. "sugar-free energy drink", never just "energy drink") —
 the macro database matches on your food name and would otherwise assume full sugar. If you
-recognize the exact product, use its real label nutrition for your macro totals.
+recognize the exact product, use its real label nutrition for your macro totals. Know your
+brands: Alani Nu, Celsius, C4, Ghost, Reign, Bang, and Monster Ultra energy drinks are all
+zero/low-sugar (~5-15 kcal per can) even when the can doesn't say so — name them
+"<brand> sugar-free energy drink" unless it is clearly a sugared variety.
 
 Return ONLY valid minified JSON, no markdown, exactly:
 {"is_food":true|false,
 "name":"<short meal name, or what the photo shows if not food>",
-"items":[{"food":"<plain USDA-style food name>","grams":<int>}],
+"items":[{"food":"<plain USDA-style food name>","grams":<int TOTAL grams>,"count":<int, ONLY for discrete countable pieces (tortillas, eggs, slices, cans) — omit otherwise>}],
 "portion_note":"<brief portion reasoning, or why it's not food>",
 "calories":<int>,"protein_g":<int>,"carbs_g":<int>,"fat_g":<int>,
 "confidence":"high|medium|low"}
@@ -109,8 +112,15 @@ def _normalize(raw: dict) -> dict:
                     grams = float(grams) if grams is not None else None
                 except (TypeError, ValueError):
                     grams = None
+                try:
+                    count = int(it.get("count") or 0)
+                except (TypeError, ValueError):
+                    count = 0
                 if food:
-                    items_named.append({"food": food, "grams": grams})
+                    named = {"food": food, "grams": grams}
+                    if count >= 2:
+                        named["count"] = count
+                    items_named.append(named)
                     items.append(food)
             elif isinstance(it, str) and it.strip():
                 items.append(it.strip())
@@ -174,16 +184,20 @@ def _mock(image_bytes: bytes) -> dict:
     return out
 
 
-def _gemini(image_bytes: bytes, mime: str = "image/jpeg") -> dict:
+def _gemini(image_bytes: bytes, mime: str = "image/jpeg", note: str = "") -> dict:
     # Key goes in a header, NOT the URL — so it can't leak via error messages or logs
     # (httpx error strings echo the request URL).
     url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
            f"{GEMINI_MODEL}:generateContent")
     headers = {"x-goog-api-key": GEMINI_API_KEY}
+    prompt = PROMPT
+    if note:
+        prompt += ("\n\nThe user added this note about the meal — TRUST IT over visual "
+                   f"guesses for contents, preparation, and hidden ingredients: {note}")
     payload = {
         "contents": [{
             "parts": [
-                {"text": PROMPT},
+                {"text": prompt},
                 {"inline_data": {"mime_type": mime,
                                  "data": base64.b64encode(image_bytes).decode()}},
             ]
@@ -253,8 +267,11 @@ def ground_with_usda(result: dict) -> dict:
             refs = list(ex.map(lambda it: _usda_per100g(it["food"], client), named))
 
     for it, ref in zip(named, refs):
+        base = {"food": it["food"], "grams": it["grams"]}
+        if it.get("count"):
+            base["count"] = it["count"]
         if not ref:
-            breakdown.append({"food": it["food"], "grams": it["grams"], "matched": False})
+            breakdown.append({**base, "matched": False})
             continue
         f = it["grams"] / 100.0
         per = ref["per100g"]
@@ -262,8 +279,7 @@ def ground_with_usda(result: dict) -> dict:
         for k in totals:
             totals[k] += item_macros[k]
         matched += 1
-        breakdown.append({"food": it["food"], "grams": it["grams"], "matched": True,
-                          "usda": ref["desc"],
+        breakdown.append({**base, "matched": True, "usda": ref["desc"],
                           "per100g": {k: round(per.get(k) or 0, 1) for k in totals},
                           **item_macros})
 
@@ -306,17 +322,18 @@ def _error_result(reason: str) -> dict:
             "flag": reason, "warning": reason}
 
 
-def analyze(image_bytes: bytes, mime: str = "image/jpeg") -> dict:
+def analyze(image_bytes: bytes, mime: str = "image/jpeg", note: str = "") -> dict:
     """Main entry point. Never raises — always returns a usable, honest dict.
 
     No API key  -> MOCK demo meal (clearly flagged).
     API/parse error -> explicit ERROR state (never a fake meal).
     Success     -> validated, USDA-grounded estimate.
+    `note` is the user's optional description — it sharpens the estimate but is never required.
     """
     if not GEMINI_API_KEY:
         return validate(ground_with_usda(_mock(image_bytes)))
     try:
-        result = _gemini(image_bytes, mime)
+        result = _gemini(image_bytes, mime, note)
     except json.JSONDecodeError:
         return _error_result("The AI response couldn't be read. Try retaking the photo.")
     except httpx.HTTPStatusError as e:
