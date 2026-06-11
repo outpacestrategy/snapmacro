@@ -392,7 +392,8 @@ function renderWeek(w){
     <p class="honest" style="margin-top:8px">${w.days.length} day(s) logged. ${esc(w.note||'')}</p>`;
 }
 
-let LAST_FILE = null, PENDING_NOTE = '', QA = false;
+let LAST_FILE = null, PENDING_NOTE = '', ASKED = [];
+const MAX_QUESTIONS = 3;
 
 async function onPhoto(input){
   const file = input.files[0]; input.value='';
@@ -400,7 +401,7 @@ async function onPhoto(input){
   $('analyzing').style.display='block';
   const fd = new FormData(); fd.append('image', file);
   const note = $('noteIn').value.trim();
-  LAST_FILE = file; PENDING_NOTE = note; QA = false;
+  LAST_FILE = file; PENDING_NOTE = note; ASKED = [];
   if(note) fd.append('note', note);
   try{
     const res = await fetch('/api/analyze',{method:'POST',body:fd});
@@ -527,24 +528,28 @@ function openSheet(d){
   $('overlay').classList.add('show');
 }
 
-// One tappable clarifying question, only when the model says the ambiguity matters
-// (same design rule as the future chat agent). Answering re-analyzes the same photo
-// with the answer as ground truth; ignoring it and logging straight away is always fine.
+// Tappable clarifying questions, asked one at a time while the sheet is open. Each
+// answer re-analyzes the photo with the Q/A appended as ground truth, and the model may
+// surface the next-most-important ambiguity — until nothing material is left, the round
+// cap is hit, or the user just logs. Logging without answering is always fine.
 function renderQuestion(d){
   const el = $('qBox');
-  if(!d.question || QA){ el.innerHTML=''; return; }
-  el.innerHTML = `<div class="qtxt">${esc(d.question.text)}</div>
-    <div class="qopts">${d.question.options.map((o,i)=>
+  const q = d.question;
+  if(!q || ASKED.length >= MAX_QUESTIONS || ASKED.includes(q.text)){ el.innerHTML=''; return; }
+  el.innerHTML = `<div class="qtxt">${esc(q.text)}</div>
+    <div class="qopts">${q.options.map((o,i)=>
       `<button class="qopt" onclick="answerQ(${i})">${esc(o)}</button>`).join('')}</div>`;
 }
 
 async function answerQ(i){
-  const opt = pending && pending.question && pending.question.options[i];
+  const q = pending && pending.question;
+  const opt = q && q.options[i];
   if(!opt || !LAST_FILE) return;
-  QA = true;
+  ASKED.push(q.text);
+  PENDING_NOTE = (PENDING_NOTE ? PENDING_NOTE + ' ' : '') + `Q: ${q.text} A: ${opt}.`;
   $('qBox').innerHTML = '<div class="loading"><span class="spin"></span>Updating estimate…</div>';
   const fd = new FormData(); fd.append('image', LAST_FILE);
-  fd.append('note', (PENDING_NOTE ? PENDING_NOTE + '; ' : '') + opt);
+  fd.append('note', PENDING_NOTE);
   try{
     const r = await fetch('/api/analyze',{method:'POST',body:fd});
     const d = await r.json();

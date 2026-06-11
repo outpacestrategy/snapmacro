@@ -50,11 +50,13 @@ Return ONLY valid minified JSON, no markdown, exactly:
 "confidence":"high|medium|low",
 "question":{"text":"<one short question>","options":["<2-4 short answers>"]}}
 
-The "question" field is OPTIONAL and usually OMITTED. Include it only when ONE visual
+The "question" field is OPTIONAL and usually OMITTED. Include it only when a visual
 ambiguity would materially change the macros (e.g. grilled vs fried, flour vs corn
 tortillas, butter vs dry-cooked, sugared vs diet when the label is unreadable). At most
-ONE question. Never ask about portion size (the user can edit grams), and never ask
-anything the user's note already answers.
+ONE question per response — the single most impactful unresolved ambiguity. The user's
+note may contain earlier Q/A pairs: NEVER re-ask anything it answers; ask about a
+remaining DIFFERENT ambiguity or omit the field if nothing material is left. Never ask
+about portion size (the user can edit grams).
 Keep totals realistic for one human meal (calories roughly 0-3000). Be terse."""
 
 # Sanity bounds for a single human meal. Outside these = flag for review, never silent.
