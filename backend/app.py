@@ -125,7 +125,9 @@ def _set_cookie(resp, code, secure):
 @app.get("/", response_class=HTMLResponse)
 def home():
     with open(os.path.join(FRONTEND, "index.html"), encoding="utf-8") as f:
-        return f.read()
+        # no-cache: the whole UI is this one file — a stale cached copy means users
+        # silently miss shipped features (real incident: phone kept a pre-questions build)
+        return HTMLResponse(f.read(), headers={"Cache-Control": "no-cache"})
 
 
 # ---------- auth / onboarding ----------
